@@ -353,3 +353,61 @@ async def tcc_pipeline(req: PipelineRequest, user_id: str = Depends(get_current_
         "subtype": result.subtype,
         "top_drugs": top_drugs,
     }
+
+
+# ---------------------------------------------------------------------------
+# Chat endpoint (SSE streaming)
+# ---------------------------------------------------------------------------
+
+from fastapi.responses import StreamingResponse
+from services.chat_agent import chat as agent_chat, clear_history
+
+
+class ChatRequest(BaseModel):
+    message: str
+    pet_context: dict = Field(default_factory=dict)
+
+
+@router.post("/chat/{pet_id}")
+async def pet_chat(
+    pet_id: str,
+    req: ChatRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Streaming SSE chat endpoint for a pet.
+    Returns text/event-stream with chunked assistant response.
+    RAG citations appended as __RAG_CITATIONS__[...]__END_CITATIONS__ sentinel.
+    """
+    async def generate():
+        async for chunk in agent_chat(
+            pet_id=f"{user_id}:{pet_id}",   # namespace by user to prevent cross-user leakage
+            user_message=req.message,
+            pet_context=req.pet_context,
+        ):
+            yield chunk
+
+    return StreamingResponse(generate(), media_type="text/plain; charset=utf-8")
+
+
+@router.delete("/chat/{pet_id}/history")
+async def clear_chat_history(
+    pet_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Clear conversation history for a pet."""
+    clear_history(f"{user_id}:{pet_id}")
+    return {"status": "cleared", "pet_id": pet_id}
+
+
+@router.post("/rag/query")
+async def rag_query(
+    body: dict,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Direct RAG retrieval endpoint for testing."""
+    from services.rag_service import retrieve
+    query = body.get("query", "")
+    k = int(body.get("k", 3))
+    results = retrieve(query, k=k)
+    return {"query": query, "results": results}

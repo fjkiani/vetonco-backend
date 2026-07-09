@@ -1,11 +1,25 @@
 """
-VetOnco — Canine TCC Gene Panels & Drug Panel
-19-gene panel (Tier A/B/C), 7 PASS drugs + 3 QUARANTINE, breed BRAF priors.
-Source: Dhawan et al. 2018 (GSE110661), Knapp et al. 2014, Decker et al. 2015.
+VetOnco — Canine TCC Gene Panels & Drug Panel v2
+19-gene panel (Tier A/B/C), strict PK quarantine policy.
+
+QUARANTINE POLICY (NON-NEGOTIABLE):
+    A drug is VERIFIED only if ALL THREE of the following come from a
+    PRIMARY CANINE STUDY (not a formulary, not human data, not in vitro only):
+        1. IC50 (µM) — canine TCC cell line or in vivo
+        2. Cmax (µM) — canine PK study at clinical dose
+        3. PPB (%) — canine plasma protein binding
+
+    At launch: ONLY toceranib is VERIFIED.
+    All other drugs are QUARANTINED until primary canine PK is sourced.
+
+Sources:
+    Gene panel: Dhawan et al. 2018 (GSE110661), Knapp et al. 2014, Decker et al. 2015
+    Toceranib PK: Henry et al. 2009 (PMID 19185954)
+    ORR data: see VETONCO_GROUND_TRUTH_BENCHMARKS.mdc
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Optional
 
 # ---------------------------------------------------------------------------
 # Gene panel
@@ -27,8 +41,9 @@ TCC_PANEL_GENES_TIER_C = [
 
 ALL_PANEL_GENES = TCC_PANEL_GENES_TIER_A + TCC_PANEL_GENES_TIER_B + TCC_PANEL_GENES_TIER_C
 
+
 # ---------------------------------------------------------------------------
-# Drug panel
+# DrugEntry dataclass
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -37,153 +52,210 @@ class DrugEntry:
     mechanism: str
     targets: list[str]
     braf_requirement: Literal["required", "preferred", "none"]
-    verdict: Literal["PASS", "QUARANTINE"]
-    quarantined: bool
-    quarantine_reason: str | None = None
-    chembl_id: str | None = None
-    typical_dose_mg_kg: float | None = None
-    schedule: str | None = None
-    notes: str | None = None
+    verdict: str
 
+    # ORR ground truth (published canine TCC trials)
+    orr: Optional[float]          # fraction (0.0–1.0), None if no data
+    orr_source: Optional[str]     # citation string
+    orr_n: Optional[int]          # trial n
+
+    # Evidence confidence (for ORR × confidence formula)
+    evidence_confidence: float    # A=1.0, B=0.7, C=0.4
+
+    # BRAF deltas (patient-specific score adjustments)
+    braf_delta_positive: float    # braf_status == "positive"
+    braf_delta_negative: float    # braf_status == "negative"
+    braf_delta_unknown: float     # braf_status == "unknown"
+
+    # PK fields — ALL must come from primary canine study to be VERIFIED
+    pk_status: Literal["VERIFIED", "UNVERIFIED"]
+    pk_ic50_um: Optional[float]   # IC50 in µM (canine TCC cell line)
+    pk_cmax_um: Optional[float]   # Cmax in µM (canine PK study)
+    pk_ppb: Optional[float]       # plasma protein binding fraction (0.0–1.0)
+    pk_source: Optional[str]      # primary canine PK citation
+
+    # Quarantine
+    quarantine_reason: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# BRAF breed priors
+# ---------------------------------------------------------------------------
+
+BRAF_BREED_PRIORS: dict[str, float] = {
+    "scottish terrier": 0.85,
+    "beagle": 0.70,
+    "shetland sheepdog": 0.65,
+    "west highland white terrier": 0.60,
+    "fox terrier": 0.55,
+    "other": 0.40,
+}
+
+
+def get_braf_prior(breed: str) -> float:
+    return BRAF_BREED_PRIORS.get(breed.lower().strip(), 0.40)
+
+
+# ---------------------------------------------------------------------------
+# Drug panel
+# ---------------------------------------------------------------------------
 
 DRUG_PANEL: list[DrugEntry] = [
+
+    # ── VERIFIED ──────────────────────────────────────────────────────────
+    DrugEntry(
+        name="toceranib",
+        mechanism="Multi-kinase inhibitor (VEGFR2, PDGFR, KIT)",
+        targets=["VEGFR2", "PDGFR", "KIT", "BRAF"],
+        braf_requirement="preferred",
+        verdict="PASS",
+        orr=0.26,
+        orr_source="Bernabe et al. 2013 (PMID 23279175)",
+        orr_n=30,
+        evidence_confidence=1.0,
+        braf_delta_positive=+0.12,
+        braf_delta_negative=0.00,
+        braf_delta_unknown=+0.05,
+        pk_status="VERIFIED",
+        pk_ic50_um=0.010,
+        pk_cmax_um=0.220,
+        pk_ppb=0.93,
+        pk_source="Henry et al. 2009 (PMID 19185954)",
+        quarantine_reason=None,
+    ),
+
+    # ── QUARANTINED — PPB not from primary canine study ───────────────────
+    DrugEntry(
+        name="mitoxantrone",
+        mechanism="Topoisomerase II inhibitor",
+        targets=["TOP2A", "TOP2B"],
+        braf_requirement="none",
+        verdict="QUARANTINE",
+        orr=0.35,
+        orr_source="Henry et al. 2003 (PMID 12825866) — combination with piroxicam",
+        orr_n=48,
+        evidence_confidence=1.0,
+        braf_delta_positive=0.00,
+        braf_delta_negative=0.00,
+        braf_delta_unknown=0.00,
+        pk_status="UNVERIFIED",
+        pk_ic50_um=0.10,
+        pk_cmax_um=0.75,
+        pk_ppb=None,   # PPB not from primary canine study
+        pk_source="Ogilvie et al. 1994 — Cmax/IC50 only; PPB unconfirmed",
+        quarantine_reason="PPB not confirmed from primary canine study (Ogilvie 1994 reports Cmax/IC50 only)",
+    ),
+
+    # ── QUARANTINED — No primary canine PK study ──────────────────────────
     DrugEntry(
         name="piroxicam",
         mechanism="COX-1/COX-2 inhibitor (NSAID)",
         targets=["PTGS1", "PTGS2"],
         braf_requirement="none",
-        verdict="PASS",
-        quarantined=False,
-        chembl_id="CHEMBL527",
-        typical_dose_mg_kg=0.3,
-        schedule="q24h",
-        notes="First-line for canine TCC; GI protection recommended",
+        verdict="QUARANTINE",
+        orr=0.18,
+        orr_source="Knapp et al. 1994 (PMID 8188077)",
+        orr_n=34,
+        evidence_confidence=1.0,
+        braf_delta_positive=0.00,
+        braf_delta_negative=0.00,
+        braf_delta_unknown=0.00,
+        pk_status="UNVERIFIED",
+        pk_ic50_um=None,
+        pk_cmax_um=None,
+        pk_ppb=None,
+        pk_source=None,
+        quarantine_reason="No primary canine PK study. IC50, Cmax, PPB not confirmed from canine data.",
     ),
-    DrugEntry(
-        name="toceranib",
-        mechanism="Multi-kinase inhibitor (VEGFR2, PDGFR, KIT, FLT3)",
-        targets=["KDR", "PDGFRB", "KIT", "FLT3"],
-        braf_requirement="preferred",
-        verdict="PASS",
-        quarantined=False,
-        chembl_id="CHEMBL1289926",
-        typical_dose_mg_kg=2.75,
-        schedule="q48h",
-        notes="Preferred in BRAF+ cases; monitor CBC weekly",
-    ),
-    DrugEntry(
-        name="mitoxantrone",
-        mechanism="Topoisomerase II inhibitor / DNA intercalator",
-        targets=["TOP2A"],
-        braf_requirement="none",
-        verdict="PASS",
-        quarantined=False,
-        chembl_id="CHEMBL58",
-        typical_dose_mg_kg=None,
-        schedule="q21d IV",
-        notes="5–6 mg/m² IV; requires BSA calculation",
-    ),
+
     DrugEntry(
         name="vinblastine",
-        mechanism="Vinca alkaloid — microtubule destabilizer",
-        targets=["TUBB"],
+        mechanism="Vinca alkaloid — microtubule inhibitor",
+        targets=["TUBB", "TUBA1A"],
         braf_requirement="none",
-        verdict="PASS",
-        quarantined=False,
-        chembl_id="CHEMBL255863",
-        typical_dose_mg_kg=None,
-        schedule="q7d IV",
-        notes="2 mg/m² IV weekly; myelosuppression monitoring required",
+        verdict="QUARANTINE",
+        orr=0.22,
+        orr_source="Allstadt et al. 2015 (PMID 25823835)",
+        orr_n=36,
+        evidence_confidence=0.7,
+        braf_delta_positive=0.00,
+        braf_delta_negative=0.00,
+        braf_delta_unknown=0.00,
+        pk_status="UNVERIFIED",
+        pk_ic50_um=None,
+        pk_cmax_um=None,
+        pk_ppb=None,
+        pk_source=None,
+        quarantine_reason="No primary canine PK study. IC50, Cmax, PPB not confirmed from canine data.",
     ),
+
     DrugEntry(
         name="carboplatin",
         mechanism="Platinum alkylating agent — DNA crosslinker",
-        targets=["BRCA2", "ERCC2"],
+        targets=["ERCC1", "ERCC2", "MSH2"],
         braf_requirement="none",
-        verdict="PASS",
-        quarantined=False,
-        chembl_id="CHEMBL11359",
-        typical_dose_mg_kg=None,
-        schedule="q21d IV",
-        notes="300 mg/m² IV; nephrotoxicity monitoring; avoid in renal disease",
+        verdict="QUARANTINE",
+        orr=0.38,
+        orr_source="Boria et al. 2005 (PMID 15822463)",
+        orr_n=31,
+        evidence_confidence=0.7,
+        braf_delta_positive=0.00,
+        braf_delta_negative=0.00,
+        braf_delta_unknown=0.00,
+        pk_status="UNVERIFIED",
+        pk_ic50_um=None,
+        pk_cmax_um=None,
+        pk_ppb=None,
+        pk_source=None,
+        quarantine_reason="No primary canine Cmax study. PPB ~2% is established pharmacology but Cmax not confirmed from primary canine study. No PARTIAL loopholes.",
     ),
+
     DrugEntry(
         name="gemcitabine",
         mechanism="Nucleoside analog — ribonucleotide reductase inhibitor",
         targets=["RRM1", "RRM2"],
         braf_requirement="none",
-        verdict="PASS",
-        quarantined=False,
-        chembl_id="CHEMBL888",
-        typical_dose_mg_kg=None,
-        schedule="q7d IV",
-        notes="800 mg/m² IV; often combined with carboplatin",
+        verdict="QUARANTINE",
+        orr=0.40,
+        orr_source="Robat et al. 2012 (PMID 22251430) — combination with piroxicam, n=10",
+        orr_n=10,
+        evidence_confidence=0.7,
+        braf_delta_positive=0.00,
+        braf_delta_negative=0.00,
+        braf_delta_unknown=0.00,
+        pk_status="UNVERIFIED",
+        pk_ic50_um=None,
+        pk_cmax_um=None,
+        pk_ppb=None,
+        pk_source=None,
+        quarantine_reason="No primary canine PK study. ORR from n=10 combination trial (Robat 2012) — insufficient for monotherapy claim.",
     ),
+
     DrugEntry(
         name="trametinib",
         mechanism="MEK1/2 inhibitor",
         targets=["MAP2K1", "MAP2K2"],
         braf_requirement="required",
-        verdict="PASS",
-        quarantined=False,
-        chembl_id="CHEMBL2103875",
-        typical_dose_mg_kg=0.03,
-        schedule="q24h",
-        notes="BRAF V595E required; off-label; limited canine PK data",
-    ),
-    # QUARANTINE drugs
-    DrugEntry(
-        name="vemurafenib",
-        mechanism="BRAF V600E inhibitor",
-        targets=["BRAF"],
-        braf_requirement="required",
         verdict="QUARANTINE",
-        quarantined=True,
-        quarantine_reason="Human BRAF V600E inhibitor; canine mutation is V595E — paradoxical activation risk",
-        chembl_id="CHEMBL1229517",
-    ),
-    DrugEntry(
-        name="dabrafenib",
-        mechanism="BRAF V600E/K inhibitor",
-        targets=["BRAF"],
-        braf_requirement="required",
-        verdict="QUARANTINE",
-        quarantined=True,
-        quarantine_reason="Same V600E vs V595E mismatch as vemurafenib; insufficient canine safety data",
-        chembl_id="CHEMBL2028663",
-    ),
-    DrugEntry(
-        name="erdafitinib",
-        mechanism="Pan-FGFR inhibitor",
-        targets=["FGFR1", "FGFR2", "FGFR3", "FGFR4"],
-        braf_requirement="none",
-        verdict="QUARANTINE",
-        quarantined=True,
-        quarantine_reason="No published canine PK/PD data; FGFR3 amplification not validated as canine TCC driver",
-        chembl_id="CHEMBL3545110",
+        orr=None,
+        orr_source=None,
+        orr_n=None,
+        evidence_confidence=0.4,
+        braf_delta_positive=+0.20,
+        braf_delta_negative=-0.15,
+        braf_delta_unknown=+0.05,
+        pk_status="UNVERIFIED",
+        pk_ic50_um=None,
+        pk_cmax_um=None,
+        pk_ppb=None,
+        pk_source=None,
+        quarantine_reason="No published canine TCC ORR. No primary canine PK study. Human PK data only.",
     ),
 ]
 
-PASS_DRUGS = [d for d in DRUG_PANEL if not d.quarantined]
-QUARANTINE_DRUGS = [d for d in DRUG_PANEL if d.quarantined]
-
 # ---------------------------------------------------------------------------
-# Breed BRAF priors
+# Convenience partitions
 # ---------------------------------------------------------------------------
 
-BREED_BRAF_PRIOR: dict[str, float] = {
-    "scottish terrier": 0.85,
-    "shetland sheepdog": 0.72,
-    "beagle": 0.68,
-    "west highland white terrier": 0.65,
-    "fox terrier": 0.60,
-    "airedale terrier": 0.58,
-    "mixed breed": 0.35,
-    "labrador retriever": 0.30,
-    "golden retriever": 0.28,
-    "other": 0.35,
-}
-
-def get_braf_prior(breed: str) -> float:
-    """Return breed-specific BRAF V595E prior probability."""
-    return BREED_BRAF_PRIOR.get(breed.lower().strip(), 0.35)
+PASS_DRUGS = [d for d in DRUG_PANEL if d.pk_status == "VERIFIED"]
+QUARANTINE_DRUGS = [d for d in DRUG_PANEL if d.pk_status != "VERIFIED"]
