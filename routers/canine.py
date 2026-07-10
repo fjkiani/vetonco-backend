@@ -155,6 +155,13 @@ async def tcc_dosage_panel(req: PanelDosageRequest, user_id: str = Depends(get_c
 
 @router.post("/tcc/recipe")
 async def tcc_recipe(req: RecipeRequest, user_id: str = Depends(get_current_user_id)):
+    """
+    Full pharmacist recipe card — PharmacistDrugEntry schema (16 fields/drug) + pdf_b64.
+    Frozen: delegates to compute_full_panel_dosage() and generate_recipe_card() only.
+    """
+    import base64
+    from dataclasses import asdict as _asdict
+
     dose_results = compute_full_panel_dosage(
         weight_kg=req.weight_kg,
         creatinine_mg_dl=req.creatinine_mg_dl,
@@ -168,7 +175,16 @@ async def tcc_recipe(req: RecipeRequest, user_id: str = Depends(get_current_user
         weight_kg=req.weight_kg,
         prescribing_vet=req.prescribing_vet,
         dose_results=dose_results,
+        generate_pdf=True,
     )
+
+    drugs_serialized = [_asdict(d) for d in card.drugs]
+    pdf_b64 = (
+        base64.b64encode(card.pdf_bytes).decode("utf-8")
+        if card.pdf_bytes
+        else None
+    )
+
     return {
         "pet_name": card.pet_name,
         "species": card.species,
@@ -176,8 +192,11 @@ async def tcc_recipe(req: RecipeRequest, user_id: str = Depends(get_current_user
         "weight_kg": card.weight_kg,
         "bsa_m2": card.bsa_m2,
         "prescribing_vet": card.prescribing_vet,
+        "rx_number": card.rx_number,
         "date_issued": card.date_issued,
-        "drugs": card.drugs,
+        "label_text": card.label_text,
+        "pdf_b64": pdf_b64,
+        "drugs": drugs_serialized,
         "interactions": card.interactions,
         "monitoring": card.monitoring,
         "printable_text": card.printable_text,
